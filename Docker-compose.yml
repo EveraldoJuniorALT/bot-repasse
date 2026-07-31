@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # API DO WHATSAPP (Evolution API / Baileys)
+  # ==========================================
+  evolution-api:
+    image: atendai/evolution-api:v1.8.2
+    container_name: evolution-api
+    ports:
+      - "8081:8080" # Expõe a API na porta 8081 do seu computador local
+    environment:
+      - SERVER_PORT=8080
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=${WHATSAPP_API_KEY} # Puxa do seu .env
+      - DATABASE_PROVIDER=sqlite
+    volumes:
+      - evolution_instances:/evolution/instances
+    restart: unless-stopped
+
+  # ==========================================
+  # NOSSO BOT JAVA
+  # ==========================================
+  frequencymind-bot:
+    build: .
+    container_name: frequencymind-bot
+    depends_on:
+      - evolution-api
+    env_file:
+      - .env
+    environment:
+      # Sobrescreve a URL do .env para a rede interna do Docker (NomeDoContainer:PortaInterna)
+      - WHATSAPP_API_URL=http://evolution-api:8080
+    restart: unless-stopped
+
+volumes:
+  evolution_instances:

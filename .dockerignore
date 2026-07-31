@@ -1,0 +1,5 @@
+# Ignora arquivos locais para não enviar lixo para o contexto de build do Docker
+target/
+.idea/
+*.iml
+.git/
