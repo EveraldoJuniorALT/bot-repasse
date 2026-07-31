@@ -31,3 +31,10 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Arquivos de Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Credenciais e Variáveis de Ambiente
+.env
