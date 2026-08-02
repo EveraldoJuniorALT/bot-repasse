@@ -4,6 +4,7 @@ import com.bot_repasse.bot.application.service.PromoPostOrchestrator;
 import com.bot_repasse.bot.config.TelegramProperties;
 import com.bot_repasse.bot.domain.model.PromoPost;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
@@ -21,7 +22,9 @@ public class TelegramBotListener extends TelegramLongPollingBot {
     private final TelegramProperties properties;
     private final PromoPostOrchestrator orchestrator;
     private final TelegramMediaDownloader mediaDownloader;
+    private final long startTime;
 
+    @Autowired
     public TelegramBotListener(TelegramProperties properties,
                                PromoPostOrchestrator orchestrator,
                                TelegramMediaDownloader mediaDownloader) {
@@ -29,21 +32,18 @@ public class TelegramBotListener extends TelegramLongPollingBot {
         this.properties = properties;
         this.orchestrator = orchestrator;
         this.mediaDownloader = mediaDownloader;
+        this.startTime = System.currentTimeMillis() / 1000L;
     }
 
     @Override
     public void onUpdateReceived(Update update) {
-        Message message = extractMessageFromUpdate(update);
-        if (message == null) return;
+        if (update.hasMessage()) {
+            if (update.getMessage().getDate() < startTime) return;
 
-        // Valida se a mensagem veio do canal que configuramos no .env
-        String chatId = String.valueOf(message.getChatId());
-        if (!chatId.equals(properties.channelId())) {
-            return;
+            Message message = update.getMessage();
+            log.info("[TELEGRAM] Nova postagem interceptada. ID: {}", message.getMessageId());
+            processPost(message);
         }
-
-        log.info("[TELEGRAM] Nova postagem interceptada. ID: {}", message.getMessageId());
-        processPost(message);
     }
 
     private void processPost(Message message) {
@@ -85,12 +85,6 @@ public class TelegramBotListener extends TelegramLongPollingBot {
         } catch (IllegalArgumentException e) {
             log.warn("[TELEGRAM] Postagem ignorada pela regra de negócio: {}", e.getMessage());
         }
-    }
-
-    private Message extractMessageFromUpdate(Update update) {
-        if (update.hasChannelPost()) return update.getChannelPost();
-        if (update.hasMessage()) return update.getMessage();
-        return null;
     }
 
     private String extractText(Message message) {

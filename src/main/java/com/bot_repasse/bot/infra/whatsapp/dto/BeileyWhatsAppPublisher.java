@@ -6,8 +6,10 @@ import com.bot_repasse.bot.domain.model.PromoPost;
 import com.bot_repasse.bot.domain.port.WhatsAppPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Base64;
 import java.util.List;
@@ -53,7 +55,7 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
         );
 
         log.info("[WHATSAPP] Enviando mídia em Base64 para o canal...");
-        enviarRequisicao("/message/sendMedia", mediaPayload);
+        enviarRequisicao("/message/sendMedia/", mediaPayload);
 
         // Se o texto era gigante e sobrou, enviamos o restante como mensagens de texto normais
         for (int i = 1; i < textParts.size(); i++) {
@@ -73,27 +75,33 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
                 properties.destinationId(),
                 texto
         );
-        enviarRequisicao("/message/sendText", textPayload);
+        enviarRequisicao("/message/sendText/", textPayload);
     }
 
     /**
      * Centraliza a chamada HTTP para a API do Baileys.
      */
     private void enviarRequisicao(String endpoint, Object payload) {
-        String url = String.format("%s%s/%s", properties.apiUrl(), endpoint, properties.instanceName());
+        String url = properties.apiUrl() + endpoint + properties.instanceName();
+        System.out.println("[WHATSAPP] Enviando requisição para: " + url + " com payload: " + payload);
 
         try {
             webClient.post()
                     .uri(url)
-                    .header("apikey", properties.apiKey()) // Autenticação da API externa
+                    .header("apikey", properties.apiKey())
+                    .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(payload)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .block(); // Aguarda a resposta (bloqueante)
+                    .block();
+
+        } catch (WebClientResponseException e) {
+
+            log.error("[WHATSAPP] ERRO DA API EVOLUTION (Causa Raiz): {}", e.getResponseBodyAsString());
+            throw new RuntimeException("Falha no envio para o WhatsApp", e);
 
         } catch (Exception e) {
-            log.error("[WHATSAPP] Erro crítico ao se comunicar com a API do Baileys: {}", e.getMessage());
-            // Lança RuntimeException para o Orquestrador pegar e (futuramente) acionar o Retry
+            log.error("[WHATSAPP] Erro interno ou de rede: {}", e.getMessage());
             throw new RuntimeException("Falha no envio para o WhatsApp", e);
         }
     }
