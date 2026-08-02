@@ -13,8 +13,6 @@ import org.telegram.telegrambots.meta.api.objects.PhotoSize;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Comparator;
 
 @Slf4j
@@ -85,17 +83,6 @@ public class TelegramBotListener extends TelegramLongPollingBot {
                         largestPhoto.getFileSize(),
                         mediaBytes.length,
                         file.getFilePath()
-                );
-
-                Path debugPath = Path.of(
-                        "/tmp/telegram-debug-" + message.getMessageId() + ".jpg"
-                );
-
-                Files.write(debugPath, mediaBytes);
-
-                log.info(
-                        "[TELEGRAM] Imagem de diagnóstico salva em {}",
-                        debugPath
                 );
 
                 mimeType = "image/jpeg"; // O Telegram padroniza fotos como JPEG

@@ -17,7 +17,7 @@ services:
   # API DO WHATSAPP (Evolution API)
   # ==========================================
   evolution-api:
-    image: evolution-api-newsletter-test:2.4.0-rc2
+    image: evolution-api-newsletter-test:2.4.0-rc2-working
     pull_policy: never
     container_name: evolution-api
 
