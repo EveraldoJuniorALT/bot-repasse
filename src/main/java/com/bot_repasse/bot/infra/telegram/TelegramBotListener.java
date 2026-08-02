@@ -89,8 +89,10 @@ public class TelegramBotListener extends TelegramLongPollingBot {
 
             } catch (TelegramApiException e) {
                 log.error("[TELEGRAM] Erro na API ao buscar informações do arquivo: {}", e.getMessage());
+                return;
             } catch (Exception e) {
                 log.error("[TELEGRAM] Erro durante o download do arquivo: {}", e.getMessage());
+                return;
             }
         }
 
