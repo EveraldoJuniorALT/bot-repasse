@@ -32,11 +32,9 @@ public class PromoPostOrchestrator implements PostOrchestrator {
 
             whatsAppPublisher.publish(post);
 
-            log.info("ORQUESTRADOR Sucesso! Post ID: {} publicado no WhatsApp.", post.id());
-        } catch (Exception e) {
-            // Em caso de falha, registramos o erro.
-            // O tratamento de retry avançado será adicionado caso a biblioteca exija.
-            log.error("ORQUESTRADOR Falha ao publicar o Post ID: {} no WhatsApp: {}", post.id(), e.getMessage());
+            log.info("ORQUESTRADOR Post ID: {} aceito pela Evolution API para publicação no WhatsApp.", post.id());
+        } catch (Exception exception) {
+            log.error("ORQUESTRADOR Falha ao publicar o Post ID: {} no WhatsApp.", post.id(), exception);
         }
     }
 }

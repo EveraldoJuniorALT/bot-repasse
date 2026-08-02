@@ -8,7 +8,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.telegram.telegrambots.meta.api.objects.Message;
@@ -22,32 +21,27 @@ class TelegramBotListenerTest {
 
     @Mock private TelegramProperties properties;
     @Mock private PromoPostOrchestrator orchestrator;
-    @Mock
-    private TelegramMediaDownloader downloader;
-    @InjectMocks
+    @Mock private TelegramMediaDownloader downloader;
     private TelegramBotListener listener;
 
     @BeforeEach
     void setUp() {
-        // Evita NullPointerException ao criar a classe mãe do Telegram
-        lenient().when(properties.token()).thenReturn("token-ficticio");
-        lenient().when(properties.channelId()).thenReturn("-100");
+        when(properties.token()).thenReturn("token-ficticio");
         listener = new TelegramBotListener(properties, orchestrator, downloader);
     }
 
     @Test
-    @DisplayName("Deve ignorar mensagens vindas de um canal não autorizado")
-    void deveIgnorarCanalNaoAutorizado() {
+    @DisplayName("Deve ignorar mensagens antigas")
+    void deveIgnorarMensagemAntiga() {
         Update update = mock(Update.class);
         Message message = mock(Message.class);
 
-        when(update.hasChannelPost()).thenReturn(true);
-        when(update.getChannelPost()).thenReturn(message);
-        when(message.getChatId()).thenReturn(-999L); // ID diferente do configurado
+        when(update.hasMessage()).thenReturn(true);
+        when(update.getMessage()).thenReturn(message);
+        when(message.getDate()).thenReturn((int) (System.currentTimeMillis() / 1000L) - 10);
 
         listener.onUpdateReceived(update);
 
-        // O Orquestrador nunca deve ser chamado
         verify(orchestrator, never()).processNewPost(any());
     }
 
@@ -57,20 +51,21 @@ class TelegramBotListenerTest {
         Update update = mock(Update.class);
         Message message = mock(Message.class);
 
-        when(update.hasChannelPost()).thenReturn(true);
-        when(update.getChannelPost()).thenReturn(message);
-        when(message.getChatId()).thenReturn(-100L); // ID Correto
+        when(update.hasMessage()).thenReturn(true);
+        when(update.getMessage()).thenReturn(message);
+        when(message.getDate()).thenReturn((int) (System.currentTimeMillis() / 1000L) + 10);
         when(message.getMessageId()).thenReturn(42);
         when(message.getText()).thenReturn("Link do AliExpress!");
 
         listener.onUpdateReceived(update);
 
-        // Captura o objeto PromoPost que foi enviado para o orquestrador
         ArgumentCaptor<PromoPost> captor = ArgumentCaptor.forClass(PromoPost.class);
         verify(orchestrator, times(1)).processNewPost(captor.capture());
 
         PromoPost postEnviado = captor.getValue();
         assertEquals("42", postEnviado.id());
         assertEquals("Link do AliExpress!", postEnviado.text());
+        assertNull(postEnviado.mediaBytes());
+        assertNull(postEnviado.mimeType());
     }
 }

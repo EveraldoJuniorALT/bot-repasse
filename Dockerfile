@@ -20,7 +20,7 @@ WORKDIR /app
 ENV TZ=America/Sao_Paulo
 
 # Copia o .jar gerado no estágio 1 para a imagem final
-COPY --from=build /app/target/frequencymind-bot-1.0.0-SNAPSHOT.jar app.jar
+COPY --from=build /app/target/bot-repasse-0.0.1-SNAPSHOT.jar app.jar
 
 # Expõe a porta do Spring Boot (útil para debug futuro)
 EXPOSE 8080
