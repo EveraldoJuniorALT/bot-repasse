@@ -1,5 +1,16 @@
-# Ignora arquivos locais para não enviar lixo para o contexto de build do Docker
 target/
 .idea/
+.vscode/
 *.iml
 .git/
+.gitignore
+.env
+.env.*
+!.env.example
+deploy/
+backups/
+*.tar
+*.tar.gz
+*.log
+.DS_Store
+Thumbs.db

@@ -1,29 +1,27 @@
-
 FROM maven:3.9.6-eclipse-temurin-21-alpine AS build
+
 WORKDIR /app
 
-# Copia apenas o pom.xml primeiro para aproveitar o cache de camadas do Docker
 COPY pom.xml .
-RUN mvn dependency:go-offline
+RUN mvn -B -ntp dependency:go-offline
 
-# Copia o código fonte e compila o .jar (ignorando testes para ser mais rápido)
 COPY src ./src
-RUN mvn clean package -DskipTests
+RUN mvn -B -ntp clean package -DskipTests
 
-# ==========================================
-# Estágio 2: Runtime (Execução)
-# ==========================================
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre-alpine AS runtime
+
+RUN apk add --no-cache tzdata \
+    && addgroup -S app \
+    && adduser -S app -G app
+
 WORKDIR /app
 
-# Define o fuso horário da aplicação (opcional, mas recomendado para logs)
 ENV TZ=America/Sao_Paulo
 
-# Copia o .jar gerado no estágio 1 para a imagem final
-COPY --from=build /app/target/bot-repasse-0.0.1-SNAPSHOT.jar app.jar
+COPY --from=build --chown=app:app /app/target/*.jar /app/app.jar
 
-# Expõe a porta do Spring Boot (útil para debug futuro)
+USER app
+
 EXPOSE 8080
 
-# Comando de inicialização
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
