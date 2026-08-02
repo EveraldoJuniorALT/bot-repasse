@@ -12,7 +12,7 @@ import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.util.List;
@@ -22,16 +22,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
 
-    /*
-     * O WhatsApp aceita até 1024 caracteres na legenda de uma mídia.
-     * O restante é enviado depois como mensagem de texto.
-     */
     private static final int MAX_CAPTION_LENGTH = 1024;
-
-    /*
-     * Tempo máximo para a Evolution responder.
-     * Uploads de mídia podem demorar mais que mensagens de texto.
-     */
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(90);
 
     private final WebClient webClient;
@@ -39,38 +30,29 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
 
     @Override
     public void publish(PromoPost post) {
-        log.info(
-                "[WHATSAPP] Preparando postagem. postId={}, possuiMidia={}, tamanhoTexto={}",
-                post.id(),
-                hasMedia(post),
-                post.text() == null ? 0 : post.text().length()
-        );
+        boolean hasMedia = post.mediaBytes() != null
+                && post.mediaBytes().length > 0;
 
         List<String> textParts = TextSplitter.split(
                 post.text(),
                 MAX_CAPTION_LENGTH
         );
 
-        if (hasMedia(post)) {
-            enviarMidiaComLegenda(post, textParts);
-            return;
-        }
+        log.info(
+                "[WHATSAPP] Preparando postagem. postId={}, possuiMidia={}, bytes={}, mimeType={}",
+                post.id(),
+                hasMedia,
+                hasMedia ? post.mediaBytes().length : 0,
+                post.mimeType()
+        );
 
-        enviarApenasTexto(textParts);
+        if (hasMedia) {
+            enviarMidiaComLegenda(post, textParts);
+        } else {
+            enviarApenasTexto(textParts);
+        }
     }
 
-    /**
-     * Envia a imagem usando multipart/form-data.
-     * <p>
-     * Esse formato replica exatamente o curl que funcionou:
-     * <p>
-     * number
-     * mediatype
-     * mimetype
-     * caption
-     * fileName
-     * file
-     */
     private void enviarMidiaComLegenda(
             PromoPost post,
             List<String> textParts
@@ -82,8 +64,19 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
         String mimeType = normalizarMimeType(post.mimeType());
         String fileName = criarNomeArquivo(post.id(), mimeType);
 
+        /*
+         * ByteArrayResource representa os mesmos bytes baixados do Telegram.
+         *
+         * É essencial sobrescrever getFilename(), pois um arquivo multipart
+         * sem nome pode ser interpretado incorretamente pela API.
+         */
         ByteArrayResource fileResource =
-                criarArquivoMultipart(post.mediaBytes(), fileName);
+                new ByteArrayResource(post.mediaBytes()) {
+                    @Override
+                    public String getFilename() {
+                        return fileName;
+                    }
+                };
 
         MultipartBodyBuilder multipart = new MultipartBodyBuilder();
 
@@ -113,15 +106,18 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
         );
 
         /*
-         * Atenção: o nome correto do campo é "file".
-         * Usar "media" gera "Unexpected field" na 2.4.0-rc2.
+         * Este é o campo que funcionou no curl.
+         *
+         * Não utilizar "media" e não transformar o arquivo em Base64.
          */
         multipart.part("file", fileResource)
                 .filename(fileName)
                 .contentType(MediaType.parseMediaType(mimeType));
 
+        String url = construirUrl("/message/sendMedia/");
+
         log.info(
-                "[WHATSAPP] Enviando mídia multipart. postId={}, destino={}, arquivo={}, mimeType={}, bytes={}, captionLength={}",
+                "[WHATSAPP] Enviando mídia multipart. postId={}, destino={}, arquivo={}, mimeType={}, bytes={}, legenda={}",
                 post.id(),
                 properties.destinationId(),
                 fileName,
@@ -130,21 +126,58 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
                 caption.length()
         );
 
-        String response = enviarMultipart(
-                "/message/sendMedia/",
-                multipart
-        );
+        try {
+            String response = webClient.post()
+                    .uri(url)
+                    .header("apikey", properties.apiKey())
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(
+                            BodyInserters.fromMultipartData(
+                                    multipart.build()
+                            )
+                    )
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .timeout(REQUEST_TIMEOUT)
+                    .block();
 
-        log.info(
-                "[WHATSAPP] Mídia aceita pela Evolution API. postId={}, resposta={}",
-                post.id(),
-                resumirResposta(response)
-        );
+            log.info(
+                    "[WHATSAPP] Evolution aceitou a mídia. postId={}, resposta={}",
+                    post.id(),
+                    resumirResposta(response)
+            );
+
+        } catch (WebClientResponseException exception) {
+            log.error(
+                    "[WHATSAPP] Evolution rejeitou a mídia. postId={}, status={}, resposta={}",
+                    post.id(),
+                    exception.getStatusCode(),
+                    exception.getResponseBodyAsString(),
+                    exception
+            );
+
+            throw new IllegalStateException(
+                    "Falha no envio da mídia para o WhatsApp",
+                    exception
+            );
+
+        } catch (Exception exception) {
+            log.error(
+                    "[WHATSAPP] Erro interno no envio da mídia. postId={}, erro={}",
+                    post.id(),
+                    exception.getMessage(),
+                    exception
+            );
+
+            throw new IllegalStateException(
+                    "Falha no envio da mídia para o WhatsApp",
+                    exception
+            );
+        }
 
         /*
          * A primeira parte foi enviada como legenda.
-         * Caso o texto ultrapasse 1024 caracteres, enviamos o restante
-         * como mensagens comuns.
+         * As partes restantes são publicadas como texto.
          */
         for (int index = 1; index < textParts.size(); index++) {
             enviarMensagemTexto(
@@ -156,13 +189,10 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
         }
     }
 
-    /**
-     * Envia posts que possuem somente texto.
-     */
     private void enviarApenasTexto(List<String> textParts) {
         if (textParts.isEmpty()) {
             log.warn(
-                    "[WHATSAPP] Post sem texto e sem blocos válidos para envio."
+                    "[WHATSAPP] Post sem texto e sem mídia. Nada para enviar."
             );
             return;
         }
@@ -188,6 +218,8 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
                 text
         );
 
+        String url = construirUrl("/message/sendText/");
+
         log.info(
                 "[WHATSAPP] Enviando texto. postId={}, parte={}/{}, caracteres={}",
                 postId,
@@ -196,133 +228,52 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
                 text.length()
         );
 
-        String response = enviarJson(
-                "/message/sendText/",
-                payload
-        );
-
-        log.info(
-                "[WHATSAPP] Texto aceito pela Evolution API. postId={}, parte={}/{}, resposta={}",
-                postId,
-                currentPart,
-                totalParts,
-                resumirResposta(response)
-        );
-    }
-
-    /**
-     * Faz chamadas JSON, utilizadas por mensagens de texto.
-     */
-    private String enviarJson(
-            String endpoint,
-            Object payload
-    ) {
-        String url = construirUrl(endpoint);
-
         try {
-            return webClient.post()
+            String response = webClient.post()
                     .uri(url)
                     .header("apikey", properties.apiKey())
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(payload)
-                    .exchangeToMono(response ->
-                            response.bodyToMono(String.class)
-                                    .defaultIfEmpty("")
-                                    .flatMap(responseBody -> {
-                                        if (response.statusCode()
-                                                .is2xxSuccessful()) {
-
-                                            return Mono.just(responseBody);
-                                        }
-
-                                        return Mono.error(
-                                                criarErroEvolution(
-                                                        url,
-                                                        response.statusCode()
-                                                                .value(),
-                                                        responseBody
-                                                )
-                                        );
-                                    })
-                    )
+                    .retrieve()
+                    .bodyToMono(String.class)
                     .timeout(REQUEST_TIMEOUT)
                     .block();
 
-        } catch (Exception exception) {
-            tratarErro(endpoint, exception);
+            log.info(
+                    "[WHATSAPP] Texto aceito pela Evolution. postId={}, parte={}/{}, resposta={}",
+                    postId,
+                    currentPart,
+                    totalParts,
+                    resumirResposta(response)
+            );
+
+        } catch (WebClientResponseException exception) {
+            log.error(
+                    "[WHATSAPP] Evolution rejeitou o texto. postId={}, status={}, resposta={}",
+                    postId,
+                    exception.getStatusCode(),
+                    exception.getResponseBodyAsString(),
+                    exception
+            );
+
             throw new IllegalStateException(
-                    "Falha ao enviar mensagem de texto para o WhatsApp",
+                    "Falha no envio do texto para o WhatsApp",
+                    exception
+            );
+
+        } catch (Exception exception) {
+            log.error(
+                    "[WHATSAPP] Erro interno no envio do texto. postId={}, erro={}",
+                    postId,
+                    exception.getMessage(),
+                    exception
+            );
+
+            throw new IllegalStateException(
+                    "Falha no envio do texto para o WhatsApp",
                     exception
             );
         }
-    }
-
-    /**
-     * Faz chamadas multipart, utilizadas no envio de fotos.
-     */
-    private String enviarMultipart(
-            String endpoint,
-            MultipartBodyBuilder multipart
-    ) {
-        String url = construirUrl(endpoint);
-
-        try {
-            return webClient.post()
-                    .uri(url)
-                    .header("apikey", properties.apiKey())
-                    .contentType(MediaType.MULTIPART_FORM_DATA)
-                    .body(
-                            BodyInserters.fromMultipartData(
-                                    multipart.build()
-                            )
-                    )
-                    .exchangeToMono(response ->
-                            response.bodyToMono(String.class)
-                                    .defaultIfEmpty("")
-                                    .flatMap(responseBody -> {
-                                        if (response.statusCode()
-                                                .is2xxSuccessful()) {
-
-                                            return Mono.just(responseBody);
-                                        }
-
-                                        return Mono.error(
-                                                criarErroEvolution(
-                                                        url,
-                                                        response.statusCode()
-                                                                .value(),
-                                                        responseBody
-                                                )
-                                        );
-                                    })
-                    )
-                    .timeout(REQUEST_TIMEOUT)
-                    .block();
-
-        } catch (Exception exception) {
-            tratarErro(endpoint, exception);
-            throw new IllegalStateException(
-                    "Falha ao enviar mídia para o WhatsApp",
-                    exception
-            );
-        }
-    }
-
-    private ByteArrayResource criarArquivoMultipart(
-            byte[] bytes,
-            String fileName
-    ) {
-        return new ByteArrayResource(bytes) {
-            @Override
-            public String getFilename() {
-                return fileName;
-            }
-        };
-    }
-
-    private boolean hasMedia(PromoPost post) {
-        return post.mediaBytes() != null
-                && post.mediaBytes().length > 0;
     }
 
     private String normalizarMimeType(String mimeType) {
@@ -330,17 +281,17 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
             return MediaType.IMAGE_JPEG_VALUE;
         }
 
-        /*
-         * A implementação atual trata apenas imagens.
-         * Impede que outro tipo de mídia seja enviado como image.
-         */
-        if (!mimeType.toLowerCase().startsWith("image/")) {
+        String normalized = mimeType
+                .trim()
+                .toLowerCase();
+
+        if (!normalized.startsWith("image/")) {
             throw new IllegalArgumentException(
                     "Tipo de mídia não suportado: " + mimeType
             );
         }
 
-        return mimeType.toLowerCase();
+        return normalized;
     }
 
     private String criarNomeArquivo(
@@ -348,74 +299,41 @@ public class BeileyWhatsAppPublisher implements WhatsAppPublisher {
             String mimeType
     ) {
         String extension = switch (mimeType) {
-            case MediaType.IMAGE_PNG_VALUE -> ".png";
+            case "image/png" -> ".png";
             case "image/webp" -> ".webp";
             case "image/gif" -> ".gif";
-            case "image/jpg", MediaType.IMAGE_JPEG_VALUE -> ".jpg";
+            case "image/jpeg", "image/jpg" -> ".jpg";
             default -> ".jpg";
         };
 
-        String safePostId = postId.replaceAll(
-                "[^a-zA-Z0-9_-]",
-                "_"
-        );
+        String safeId = postId == null
+                ? "sem-id"
+                : postId.replaceAll("[^a-zA-Z0-9_-]", "_");
 
-        return "telegram-" + safePostId + extension;
+        return "telegram-" + safeId + extension;
     }
 
     private String construirUrl(String endpoint) {
-        String apiUrl = properties.apiUrl();
+        String baseUrl = properties.apiUrl();
 
-        if (apiUrl.endsWith("/")) {
-            apiUrl = apiUrl.substring(
+        if (baseUrl.endsWith("/")) {
+            baseUrl = baseUrl.substring(
                     0,
-                    apiUrl.length() - 1
+                    baseUrl.length() - 1
             );
         }
 
-        return apiUrl
+        return baseUrl
                 + endpoint
                 + properties.instanceName();
     }
 
-    private IllegalStateException criarErroEvolution(
-            String url,
-            int statusCode,
-            String responseBody
-    ) {
-        return new IllegalStateException(
-                "Evolution API retornou HTTP "
-                        + statusCode
-                        + ". url="
-                        + url
-                        + ", resposta="
-                        + responseBody
-        );
-    }
-
-    private void tratarErro(
-            String endpoint,
-            Exception exception
-    ) {
-        log.error(
-                "[WHATSAPP] Falha na comunicação com a Evolution API. endpoint={}, instancia={}, destino={}, erro={}",
-                endpoint,
-                properties.instanceName(),
-                properties.destinationId(),
-                exception.getMessage(),
-                exception
-        );
-    }
-
-    /**
-     * Evita colocar respostas gigantes nos logs.
-     */
     private String resumirResposta(String response) {
         if (response == null || response.isBlank()) {
             return "<resposta vazia>";
         }
 
-        int maxLength = 600;
+        int maxLength = 500;
 
         if (response.length() <= maxLength) {
             return response;
